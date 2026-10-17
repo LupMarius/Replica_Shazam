@@ -3,6 +3,11 @@ import json
 from io import BytesIO
 from time import perf_counter
 
+import sqlite3
+from pathlib import Path
+
+from comparare import compara_repere
+
 import av
 import numpy as np
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -13,7 +18,11 @@ from analiza_audio import CONFIGURATIE, decodeaza_audio, extrage_repere
 app = FastAPI(title="Recunoastere muzicala")
 MAX_OCTETI = 50 * 1024 * 1024
 
-
+CALE_BAZA = (
+    Path(__file__).resolve().parent.parent
+    / "date"
+    / "catalog.db"
+)
 @app.get("/api/status")
 def status():
     return {"status": "ok"}
@@ -43,6 +52,29 @@ def analizeaza_audio(fisier: UploadFile):
     if repere.empty:
         raise HTTPException(422, "Nu au fost gasite repere audio.")
 
+    inceput_comparatie = perf_counter()
+
+    try:
+        candidati = compara_repere(
+            repere,
+            CALE_BAZA,
+            CONFIGURATIE,
+        )
+
+    except (FileNotFoundError, sqlite3.Error) as error:
+        raise HTTPException(
+            503,
+            "Catalogul nu poate fi citit. Verifica baza de date.",
+        ) from error
+
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+    timp_comparatie_ms = round(
+        (perf_counter() - inceput_comparatie) * 1000,
+        1,
+    )
+
     metadate = {
         "nume": fisier.filename or "inregistrare",
         "Fs": fs,
@@ -71,4 +103,6 @@ def analizeaza_audio(fisier: UploadFile):
         "numar_repere": len(repere),
         "amprenta_npz": npz_text,
         "timp_backend_ms": round((perf_counter() - inceput) * 1000, 1),
+        "candidati": candidati,
+        "timp_comparatie_ms": timp_comparatie_ms,
     }
